@@ -11,7 +11,7 @@ defmodule Exop.Validation do
     @moduledoc """
       An operation's contract validation failure error.
     """
-    defexception message: "Contract validation failed" 
+    defexception message: "Contract validation failed"
   end
 
   @type validation_error :: {:error, {:validation, map()}}
@@ -78,7 +78,7 @@ defmodule Exop.Validation do
       if !required_param?(contract_item) && empty_param?(received_params, contract_item) do
         []
       else
-        validate_params(contract_item, received_params, contract_item)
+        validate_params(contract_item, received_params)
       end
 
     validate(contract_tail, received_params, result ++ List.flatten(checks_result))
@@ -91,24 +91,72 @@ defmodule Exop.Validation do
   end
   defp empty_param?(params, %{name: param_name}), do: is_nil(params[param_name])
 
-  defp validate_params(%{opts: contract_items}, received_params, contract_item) do
-    for {check_name, check_params} <- contract_items, into: [] do
-      check_function_name = String.to_atom("check_#{check_name}")
-
-      cond do
-        function_present?(__MODULE__, check_function_name) ->
-          apply(__MODULE__, check_function_name, [received_params,
-                                                  Map.get(contract_item, :name),
-                                                  check_params])
-        function_present?(ValidationChecks, check_function_name) ->
-          apply(ValidationChecks, check_function_name, [received_params,
-                                                       Map.get(contract_item, :name),
-                                                       check_params])
-        true ->
-          true
+  defp validate_params(contract_item = %{name: name, opts: contract_items}, received_params) do
+    for {check_name, check_expectation} <- contract_items, into: [] do
+      if check_name == :inner do
+        inner_type = get_in(contract_items, [:type])
+        check_type =
+          if is_nil(inner_type) do
+            check_name
+          else
+            [check_name, inner_type]
+          end
+        validate_param(check_type, received_params, check_name, check_expectation)
+      else
+        validate_param([check_name, nil], received_params, name, check_expectation)
       end
     end
   end
+
+  # TODO: Add Typespec here
+  def validate_param([:inner, :map], received_params, item_name, checks) do
+    for key <- Map.keys(checks) do
+      param_checks = Enum.into(checks[key], [])
+      {:ok, param} = Map.fetch(received_params, key)
+
+      for {type, expected} <- param_checks do
+        validate_param([type, nil], received_params, key, expected)
+      end
+    end
+  end
+
+  # TODO: Add Typespec here
+  def validate_param([:inner, :list], received_params, item_name, checks) do
+    {name, params} = received_params |> List.first
+
+    params
+    |> Enum.with_index
+    |> Enum.map(fn({param, index}) ->
+      contract = %{name: "#{name}_#{index}", opts: checks}
+      validate_params(contract, param)
+    end)
+  end
+
+
+  # TODO: Add Typespec here
+  def validate_param([check_name, _], received_params, item_name, checks) do
+    check_function_name = String.to_atom("check_#{check_name}")
+    cond do
+      function_present?(__MODULE__, check_function_name) ->
+        apply(
+          __MODULE__,
+          check_function_name,
+          [received_params, item_name, checks]
+        )
+      function_present?(ValidationChecks, check_function_name) ->
+        apply(
+          ValidationChecks,
+          check_function_name,
+          [received_params, item_name, checks]
+        )
+      true -> true
+    end
+  end
+
+  # TODO: Add Typespec here
+  def validate_param(check_name, received_params, item_name, checks) when not is_list(check_name),
+  do: validate_param([check_name, nil], received_params, item_name, checks)
+
 
   @doc """
   Checks inner item of the contract param (which is a Map itself) with their own checks.
@@ -119,10 +167,10 @@ defmodule Exop.Validation do
       true
   """
   @spec check_inner(map() | Keyword.t, atom, map() | Keyword.t) :: list
-  def check_inner(check_items, item_name, cheks) when is_map(cheks) do
+  def check_inner(check_items, item_name, checks) when is_map(checks) do
      checked_param = ValidationChecks.get_check_item(check_items, item_name)
 
-     inner_contract = for {inner_param_name, inner_param_checks} <- cheks, into: [] do
+     inner_contract = for {inner_param_name, inner_param_checks} <- checks, into: [] do
        %{name: inner_param_name, opts:  inner_param_checks}
      end
 
