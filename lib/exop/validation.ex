@@ -11,7 +11,7 @@ defmodule Exop.Validation do
     @moduledoc """
       An operation's contract validation failure error.
     """
-    defexception message: "Contract validation failed" 
+    defexception message: "Contract validation failed"
   end
 
   @type validation_error :: {:error, {:validation, map()}}
@@ -74,6 +74,7 @@ defmodule Exop.Validation do
   @spec validate([map()], map() | Keyword.t, list) :: list
   def validate([], _received_params, result), do: result
   def validate([contract_item | contract_tail], received_params, result) do
+
     checks_result =
       if !required_param?(contract_item) && empty_param?(received_params, contract_item) do
         []
@@ -94,7 +95,6 @@ defmodule Exop.Validation do
   defp validate_params(%{opts: contract_items}, received_params, contract_item) do
     for {check_name, check_params} <- contract_items, into: [] do
       check_function_name = String.to_atom("check_#{check_name}")
-
       cond do
         function_present?(__MODULE__, check_function_name) ->
           apply(__MODULE__, check_function_name, [received_params,
@@ -104,10 +104,19 @@ defmodule Exop.Validation do
           apply(ValidationChecks, check_function_name, [received_params,
                                                        Map.get(contract_item, :name),
                                                        check_params])
-        true ->
-          true
+        true -> true
       end
     end
+  end
+
+  defp flatten_validation(validation) when is_list(validation) do
+    validation
+    |> Enum.reject(&(&1 == true))
+    |> Enum.map(fn(v) ->
+      # Decide whether to flatten further or not
+      if is_list(v), do: flatten_validation(v), else: v
+    end)
+    |> List.flatten
   end
 
   @doc """
@@ -119,14 +128,30 @@ defmodule Exop.Validation do
       true
   """
   @spec check_inner(map() | Keyword.t, atom, map() | Keyword.t) :: list
-  def check_inner(check_items, item_name, cheks) when is_map(cheks) do
-     checked_param = ValidationChecks.get_check_item(check_items, item_name)
+  def check_inner(check_items, item_name, checks) when is_map(checks) do
 
-     inner_contract = for {inner_param_name, inner_param_checks} <- cheks, into: [] do
-       %{name: inner_param_name, opts:  inner_param_checks}
-     end
+    # If checks[:opts] is a List, then validate each item in the
+    # check_items list individually
+    if is_list(checks[:opts]) do
+      [{_inner_param_name, inner_check_items}] = check_items
 
-     validate(inner_contract, checked_param, [])
+      # TODO: Don't lose the index when returning the error
+      inner_result =
+        inner_check_items
+        |> Enum.flat_map(fn (inner_check_item) ->
+          checks
+          |> validate_params(inner_check_item, checks)
+          |> flatten_validation
+        end)
+
+      if inner_result == [], do: true, else: inner_result
+    else
+      for {inner_param_name, inner_param_checks} <- checks, into: [] do
+        contract = %{name: inner_param_name, opts:  inner_param_checks}
+        param = [{inner_param_name, ValidationChecks.get_check_item(check_items, inner_param_name)}]
+        validate([contract], param, [])
+      end
+    end
   end
 
   def check_inner(_received_params, _contract_item_name, _check_params), do: true

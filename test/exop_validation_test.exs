@@ -138,4 +138,37 @@ defmodule ExopValidationTest do
     assert Enum.member?(keys, :a)
     assert Enum.member?(keys, :b)
   end
+
+  test "valid?/2: validates an inner list parameter which in turn has its own parameters" do
+    contract = [
+      %{
+        name: :list_param, opts: [
+          type: :list,
+          inner: %{
+            name: :map_param, opts: [
+              type: :map,
+              inner: %{
+                a: %{type: :integer, required: true},
+                b: %{type: :string, required: true, length: %{min: 7}}
+              }
+            ]
+          }
+        ]
+      }
+    ]
+
+    invalid_received_params = [list_param: [
+      %TestStruct{a: 1, b: "6chars"},
+      %TestStruct{a: nil, b: "7chars."},
+    ]]
+
+    valid_received_params = [list_param: [
+      %TestStruct{a: 1, b: "7chars!"},
+      %TestStruct{a: 2, b: "7chars."},
+    ]]
+
+    assert valid?(contract, valid_received_params) == :ok
+    {:error, {:validation, reasons}} = valid?(contract, invalid_received_params)
+    assert reasons == %{a: ["is required"], b: ["length must be greater than or equal to 7"]}
+  end
 end
