@@ -91,6 +91,8 @@ defmodule Exop.Validation do
   end
   defp empty_param?(params, %{name: param_name}), do: is_nil(params[param_name])
 
+  # TODO: Refactor this - flatten it out and move the inner type checking inside
+  #       the validate_param function.
   defp validate_params(contract_item = %{name: name, opts: contract_items}, received_params) do
     for {check_name, check_expectation} <- contract_items, into: [] do
       if check_name == :inner do
@@ -101,7 +103,7 @@ defmodule Exop.Validation do
           else
             [check_name, inner_type]
           end
-        validate_param(check_type, received_params, check_name, check_expectation)
+        validate_param(check_type, received_params[name], check_name, check_expectation)
       else
         validate_param([check_name, nil], received_params, name, check_expectation)
       end
@@ -110,8 +112,11 @@ defmodule Exop.Validation do
 
   # TODO: Add Typespec here
   def validate_param([:inner, :map], received_params, item_name, checks) do
+    received_params = Enum.into(received_params, %{})
+    checks = Enum.into(checks, %{})
     for key <- Map.keys(checks) do
       param_checks = Enum.into(checks[key], [])
+
       {:ok, param} = Map.fetch(received_params, key)
 
       for {type, expected} <- param_checks do
@@ -121,9 +126,10 @@ defmodule Exop.Validation do
   end
 
   # TODO: Add Typespec here
-  def validate_param([:inner, :list], received_params, item_name, checks) do
-    {name, params} = received_params |> List.first
+  def validate_param([:inner, :list], received_params, item_name, checks) when is_list(received_params),
+  do: validate_param([:inner, :list], List.first(received_params), item_name, checks)
 
+  def validate_param([:inner, :list], {name, params}, item_name, checks) do
     params
     |> Enum.with_index
     |> Enum.map(fn({param, index}) ->
@@ -131,7 +137,6 @@ defmodule Exop.Validation do
       validate_params(contract, param)
     end)
   end
-
 
   # TODO: Add Typespec here
   def validate_param([check_name, _], received_params, item_name, checks) do
